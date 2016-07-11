@@ -63,26 +63,106 @@ public class BufferedDiskCache {
   }
 
   /**
+   * Returns true if the key is in the in-memory key index.
+   *
+   * Not guaranteed to be correct. The cache may yet have this key even if this returns false.
+   * But if it returns true, it definitely has it.
+   *
+   * Avoids a disk read.
+   */
+  public boolean containsSync(CacheKey key) {
+      return mStagingArea.containsKey(key) || mFileCache.hasKeySync(key);
+  }
+
+  /**
+   * Performs a key-value look up in the disk cache. If no value is found in the staging area,
+   * then disk cache checks are scheduled on a background thread. Any error manifests itself as a
+   * cache miss, i.e. the returned Task resolves to false.
+   * @param key
+   * @return Task that resolves to true if an element is found, or false otherwise
+   */
+  public Task<Boolean> contains(final CacheKey key) {
+    if (containsSync(key)) {
+      return Task.forResult(true);
+    }
+    return containsAsync(key);
+  }
+
+  private Task<Boolean> containsAsync(final CacheKey key) {
+    try {
+      return Task.call(
+          new Callable<Boolean>() {
+            @Override
+            public Boolean call() throws Exception {
+              return checkInStagingAreaAndFileCache(key);
+            }
+          },
+          mReadExecutor);
+    } catch (Exception exception) {
+      // Log failure
+      // TODO: 3697790
+      FLog.w(
+          TAG,
+          exception,
+          "Failed to schedule disk-cache read for %s",
+          key.toString());
+      return Task.forError(exception);
+    }
+  }
+
+  /**
+   * Performs disk cache check synchronously.
+   * @param key
+   * @return true if the key is found in disk cache else false
+   */
+  public boolean diskCheckSync(final CacheKey key) {
+    if (containsSync(key)) {
+      return true;
+    }
+    return checkInStagingAreaAndFileCache(key);
+  }
+
+  /**
    * Performs key-value look up in disk cache. If value is not found in disk cache staging area
    * then disk cache read is scheduled on background thread. Any error manifests itself as
-   * cache miss, i.e. the returned future resolves to null.
+   * cache miss, i.e. the returned task resolves to null.
    * @param key
-   * @return ListenableFuture that resolves to cached element or null if one cannot be retrieved;
-   *   returned future never rethrows any exception
+   * @return Task that resolves to cached element or null if one cannot be retrieved;
+   *   returned task never rethrows any exception
    */
-  public Task<EncodedImage> get(
-      final CacheKey key,
-      final AtomicBoolean isCancelled) {
-    Preconditions.checkNotNull(key);
-    Preconditions.checkNotNull(isCancelled);
-
+  public Task<EncodedImage> get(CacheKey key, AtomicBoolean isCancelled) {
     final EncodedImage pinnedImage = mStagingArea.get(key);
     if (pinnedImage != null) {
+      return foundPinnedImage(key, pinnedImage);
+    }
+    return getAsync(key, isCancelled);
+  }
+
+  /**
+   * Performs key-value loop up in staging area and file cache.
+   * Any error manifests itself as a miss, i.e. returns false.
+   * @param key
+   * @return true if the image is found in staging area or File cache, false if not found
+   */
+  private boolean checkInStagingAreaAndFileCache(final CacheKey key) {
+    EncodedImage result = mStagingArea.get(key);
+    if (result != null) {
+      result.close();
       FLog.v(TAG, "Found image for %s in staging area", key.toString());
       mImageCacheStatsTracker.onStagingAreaHit();
-      return Task.forResult(pinnedImage);
+      return true;
+    } else {
+      FLog.v(TAG, "Did not find image for %s in staging area", key.toString());
+      mImageCacheStatsTracker.onStagingAreaMiss();
+      try {
+        return mFileCache.hasKey(key);
+      } catch (Exception exception) {
+        return false;
+      }
     }
+  }
 
+  private Task<EncodedImage> getAsync(final CacheKey key, final AtomicBoolean isCancelled) {
     try {
       return Task.call(
           new Callable<EncodedImage>() {
@@ -178,6 +258,61 @@ public class BufferedDiskCache {
       mStagingArea.remove(key, encodedImage);
       EncodedImage.closeSafely(finalEncodedImage);
     }
+  }
+
+  /**
+   * Removes the item from the disk cache and the staging area.
+   */
+  public Task<Void> remove(final CacheKey key) {
+    Preconditions.checkNotNull(key);
+    mStagingArea.remove(key);
+    try {
+      return Task.call(
+          new Callable<Void>() {
+            @Override
+            public Void call() throws Exception {
+              mStagingArea.remove(key);
+              mFileCache.remove(key);
+              return null;
+            }
+          },
+          mWriteExecutor);
+    } catch (Exception exception) {
+      // Log failure
+      // TODO: 3697790
+      FLog.w(TAG, exception, "Failed to schedule disk-cache remove for %s", key.toString());
+      return Task.forError(exception);
+    }
+  }
+
+  /**
+   * Clears the disk cache and the staging area.
+   */
+  public Task<Void> clearAll() {
+    mStagingArea.clearAll();
+    try {
+      return Task.call(
+          new Callable<Void>() {
+            @Override
+            public Void call() throws Exception {
+              mStagingArea.clearAll();
+              mFileCache.clearAll();
+              return null;
+            }
+          },
+          mWriteExecutor);
+    } catch (Exception exception) {
+      // Log failure
+      // TODO: 3697790
+      FLog.w(TAG, exception, "Failed to schedule disk-cache clear");
+      return Task.forError(exception);
+    }
+  }
+
+  private Task<EncodedImage> foundPinnedImage(CacheKey key, EncodedImage pinnedImage) {
+    FLog.v(TAG, "Found image for %s in staging area", key.toString());
+    mImageCacheStatsTracker.onStagingAreaHit();
+    return Task.forResult(pinnedImage);
   }
 
   /**

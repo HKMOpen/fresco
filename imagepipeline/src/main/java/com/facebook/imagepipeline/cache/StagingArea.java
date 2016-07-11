@@ -11,7 +11,9 @@ package com.facebook.imagepipeline.cache;
 
 import javax.annotation.concurrent.GuardedBy;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import com.facebook.common.internal.Preconditions;
@@ -54,6 +56,44 @@ public class StagingArea {
     final EncodedImage oldEntry = mMap.put(key, EncodedImage.cloneOrNull(encodedImage));
     EncodedImage.closeSafely(oldEntry);
     logStats();
+  }
+
+  /**
+   * Removes all items from the StagingArea.
+   */
+  public void clearAll() {
+    final List<EncodedImage> old;
+    synchronized (this) {
+      old = new ArrayList<>(mMap.values());
+      mMap.clear();
+    }
+    for (int i = 0; i < old.size(); i++) {
+      EncodedImage encodedImage = old.get(i);
+      if (encodedImage != null) {
+        encodedImage.close();
+      }
+    }
+  }
+
+  /**
+   * Removes item from the StagingArea.
+   * @param key
+   * @return true if item was removed
+   */
+  public boolean remove(final CacheKey key) {
+    Preconditions.checkNotNull(key);
+    final EncodedImage encodedImage;
+    synchronized (this) {
+      encodedImage = mMap.remove(key);
+    }
+    if (encodedImage == null) {
+      return false;
+    }
+    try {
+      return encodedImage.isValid();
+    } finally {
+      encodedImage.close();
+    }
   }
 
   /**
@@ -116,6 +156,33 @@ public class StagingArea {
       }
     }
     return storedEncodedImage;
+  }
+
+  /**
+   * Determine if an valid entry for the key exists in the staging area.
+   */
+  public synchronized boolean containsKey(CacheKey key) {
+    Preconditions.checkNotNull(key);
+    if (!mMap.containsKey(key)) {
+      return false;
+    }
+    EncodedImage storedEncodedImage = mMap.get(key);
+    synchronized (storedEncodedImage) {
+      if (!EncodedImage.isValid(storedEncodedImage)) {
+        // Reference is not valid, this means that someone cleared reference while it was still in
+        // use. Log error
+        // TODO: 3697790
+        mMap.remove(key);
+        FLog.w(
+            TAG,
+            "Found closed reference %d for key %s (%d)",
+            System.identityHashCode(storedEncodedImage),
+            key.toString(),
+            System.identityHashCode(key));
+        return false;
+      }
+      return true;
+    }
   }
 
   /**

@@ -28,15 +28,17 @@ public class BitmapMemoryCacheKeyMultiplexProducer extends
 
   public BitmapMemoryCacheKeyMultiplexProducer(
       CacheKeyFactory cacheKeyFactory,
-      Producer nextProducer) {
-    super(nextProducer);
+      Producer inputProducer) {
+    super(inputProducer);
     mCacheKeyFactory = cacheKeyFactory;
   }
 
   protected Pair<CacheKey, ImageRequest.RequestLevel> getKey(
       ProducerContext producerContext) {
     return Pair.create(
-        mCacheKeyFactory.getBitmapCacheKey(producerContext.getImageRequest()),
+        mCacheKeyFactory.getBitmapCacheKey(
+            producerContext.getImageRequest(),
+            producerContext.getCallerContext()),
         producerContext.getLowestPermittedRequestLevel());
   }
 

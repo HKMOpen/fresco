@@ -88,6 +88,8 @@ public abstract class AbstractDraweeController<T, INFO> implements
   private boolean mIsAttached;
   private boolean mIsRequestSubmitted;
   private boolean mHasFetchFailed;
+  private boolean mRetainImageOnFailure;
+  private @Nullable String mContentDescription;
   private @Nullable DataSource<T> mDataSource;
   private @Nullable T mFetchedImage;
   private @Nullable Drawable mDrawable;
@@ -99,7 +101,7 @@ public abstract class AbstractDraweeController<T, INFO> implements
       Object callerContext) {
     mDeferredReleaser = deferredReleaser;
     mUiThreadImmediateExecutor = uiThreadImmediateExecutor;
-    init(id, callerContext);
+    init(id, callerContext, true);
   }
 
   /**
@@ -110,18 +112,19 @@ public abstract class AbstractDraweeController<T, INFO> implements
    * @param callerContext tag and context for this controller
    */
   protected void initialize(String id, Object callerContext) {
-    init(id, callerContext);
+    init(id, callerContext, false);
   }
 
-  private void init(String id, Object callerContext) {
+  private void init(String id, Object callerContext, boolean justConstructed) {
     mEventTracker.recordEvent(Event.ON_INIT_CONTROLLER);
     // cancel deferred release
-    if (mDeferredReleaser != null) {
+    if (!justConstructed && mDeferredReleaser != null) {
       mDeferredReleaser.cancelDeferredRelease(this);
     }
     // reinitialize mutable state (fetch state)
     mIsAttached = false;
     releaseFetch();
+    mRetainImageOnFailure = false;
     // reinitialize optional components
     if (mRetryManager != null) {
       mRetryManager.init();
@@ -176,6 +179,9 @@ public abstract class AbstractDraweeController<T, INFO> implements
     if (mDrawable != null) {
       releaseDrawable(mDrawable);
     }
+    if (mContentDescription != null) {
+      mContentDescription = null;
+    }
     mDrawable = null;
     if (mFetchedImage != null) {
       logMessageAndImage("release", mFetchedImage);
@@ -218,6 +224,23 @@ public abstract class AbstractDraweeController<T, INFO> implements
     if (mGestureDetector != null) {
       mGestureDetector.setClickListener(this);
     }
+  }
+
+  /** Sets whether to display last available image in case of failure. */
+  protected void setRetainImageOnFailure(boolean enabled) {
+    mRetainImageOnFailure = enabled;
+  }
+
+  /** Gets accessibility content description. */
+  @Override
+  public @Nullable String getContentDescription() {
+    return mContentDescription;
+  }
+
+  /** Sets accessibility content description. */
+  @Override
+  public void setContentDescription(@Nullable String contentDescription) {
+    mContentDescription = contentDescription;
   }
 
   /** Adds controller listener. */
@@ -384,6 +407,16 @@ public abstract class AbstractDraweeController<T, INFO> implements
   }
 
   protected void submitRequest() {
+    final T closeableImage = getCachedImage();
+    if (closeableImage != null) {
+      mDataSource = null;
+      mIsRequestSubmitted = true;
+      mHasFetchFailed = false;
+      mEventTracker.recordEvent(Event.ON_SUBMIT_CACHE_HIT);
+      getControllerListener().onSubmit(mId, mCallerContext);
+      onNewResultInternal(mId, mDataSource, closeableImage, 1.0f, true, true);
+      return;
+    }
     mEventTracker.recordEvent(Event.ON_DATASOURCE_SUBMIT);
     getControllerListener().onSubmit(mId, mCallerContext);
     mSettableDraweeHierarchy.setProgress(0, true);
@@ -502,7 +535,10 @@ public abstract class AbstractDraweeController<T, INFO> implements
       logMessageAndFailure("final_failed @ onFailure", throwable);
       mDataSource = null;
       mHasFetchFailed = true;
-      if (shouldRetryOnTap()) {
+      // Set the previously available image if available.
+      if (mRetainImageOnFailure && mDrawable != null) {
+        mSettableDraweeHierarchy.setImage(mDrawable, 1f, true);
+      } else if (shouldRetryOnTap()) {
         mSettableDraweeHierarchy.setRetry(throwable);
       } else {
         mSettableDraweeHierarchy.setFailure(throwable);
@@ -533,6 +569,11 @@ public abstract class AbstractDraweeController<T, INFO> implements
   }
 
   private boolean isExpectedDataSource(String id, DataSource<T> dataSource) {
+    if (dataSource == null && mDataSource == null) {
+      // DataSource is null when we use directly the Bitmap from the MemoryCache. In this case
+      // we don't have to close the DataSource.
+      return true;
+    }
     // There are several situations in which an old data source might return a result that we are no
     // longer interested in. To verify that the result is indeed expected, we check several things:
     return id.equals(mId) && dataSource == mDataSource && mIsRequestSubmitted;
@@ -595,5 +636,9 @@ public abstract class AbstractDraweeController<T, INFO> implements
         .add("fetchedImage", getImageHash(mFetchedImage))
         .add("events", mEventTracker.toString())
         .toString();
+  }
+
+  protected T getCachedImage() {
+    return null;
   }
 }

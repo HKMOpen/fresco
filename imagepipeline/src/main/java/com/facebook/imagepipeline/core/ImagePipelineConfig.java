@@ -11,20 +11,19 @@ package com.facebook.imagepipeline.core;
 
 import javax.annotation.Nullable;
 
-import java.io.File;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
 import android.app.ActivityManager;
 import android.content.Context;
+import android.graphics.Bitmap;
 
 import com.facebook.cache.disk.DiskCacheConfig;
 import com.facebook.common.internal.Preconditions;
 import com.facebook.common.internal.Supplier;
 import com.facebook.common.memory.MemoryTrimmableRegistry;
 import com.facebook.common.memory.NoOpMemoryTrimmableRegistry;
-import com.facebook.common.util.ByteConstants;
 import com.facebook.imagepipeline.animated.factory.AnimatedImageFactory;
 import com.facebook.imagepipeline.bitmaps.PlatformBitmapFactory;
 import com.facebook.imagepipeline.cache.DefaultBitmapMemoryCacheParamsSupplier;
@@ -65,10 +64,13 @@ public class ImagePipelineConfig {
 
   // There are a lot of parameters in this class. Please follow strict alphabetical order.
   @Nullable private final AnimatedImageFactory mAnimatedImageFactory;
+  private final Bitmap.Config mBitmapConfig;
   private final Supplier<MemoryCacheParams> mBitmapMemoryCacheParamsSupplier;
   private final CacheKeyFactory mCacheKeyFactory;
   private final Context mContext;
   private final boolean mDownsampleEnabled;
+  private final boolean mDecodeMemoryFileEnabled;
+  private final FileCacheFactory mFileCacheFactory;
   private final Supplier<MemoryCacheParams> mEncodedMemoryCacheParamsSupplier;
   private final ExecutorSupplier mExecutorSupplier;
   private final ImageCacheStatsTracker mImageCacheStatsTracker;
@@ -83,6 +85,7 @@ public class ImagePipelineConfig {
   private final Set<RequestListener> mRequestListeners;
   private final boolean mResizeAndRotateEnabledForNetwork;
   private final DiskCacheConfig mSmallImageDiskCacheConfig;
+  private final ImagePipelineExperiments mImagePipelineExperiments;
 
   private ImagePipelineConfig(Builder builder) {
     mAnimatedImageFactory = builder.mAnimatedImageFactory;
@@ -91,11 +94,19 @@ public class ImagePipelineConfig {
             new DefaultBitmapMemoryCacheParamsSupplier(
                 (ActivityManager) builder.mContext.getSystemService(Context.ACTIVITY_SERVICE)) :
             builder.mBitmapMemoryCacheParamsSupplier;
+    mBitmapConfig =
+        builder.mBitmapConfig == null ?
+            Bitmap.Config.ARGB_8888 :
+            builder.mBitmapConfig;
     mCacheKeyFactory =
         builder.mCacheKeyFactory == null ?
             DefaultCacheKeyFactory.getInstance() :
             builder.mCacheKeyFactory;
     mContext = Preconditions.checkNotNull(builder.mContext);
+    mDecodeMemoryFileEnabled = builder.mDecodeMemoryFileEnabled;
+    mFileCacheFactory = builder.mFileCacheFactory == null ?
+        new DiskStorageCacheFactory(new DynamicDefaultDiskStorageFactory()) :
+        builder.mFileCacheFactory;
     mDownsampleEnabled = builder.mDownsampleEnabled;
     mEncodedMemoryCacheParamsSupplier =
         builder.mEncodedMemoryCacheParamsSupplier == null ?
@@ -147,32 +158,24 @@ public class ImagePipelineConfig {
             builder.mSmallImageDiskCacheConfig;
 
     // Below this comment can't be built in alphabetical order, because of dependencies
-
     int numCpuBoundThreads = mPoolFactory.getFlexByteArrayPoolMaxNumThreads();
     mExecutorSupplier =
         builder.mExecutorSupplier == null ?
             new DefaultExecutorSupplier(numCpuBoundThreads) : builder.mExecutorSupplier;
+    mImagePipelineExperiments = builder.mExperimentsBuilder.build();
   }
 
   private static DiskCacheConfig getDefaultMainDiskCacheConfig(final Context context) {
-    return DiskCacheConfig.newBuilder()
-        .setBaseDirectoryPathSupplier(
-            new Supplier<File>() {
-              @Override
-              public File get() {
-                return context.getApplicationContext().getCacheDir();
-              }
-            })
-        .setBaseDirectoryName("image_cache")
-        .setMaxCacheSize(40 * ByteConstants.MB)
-        .setMaxCacheSizeOnLowDiskSpace(10 * ByteConstants.MB)
-        .setMaxCacheSizeOnVeryLowDiskSpace(2 * ByteConstants.MB)
-        .build();
+    return DiskCacheConfig.newBuilder(context).build();
   }
 
   @Nullable
   public AnimatedImageFactory getAnimatedImageFactory() {
     return mAnimatedImageFactory;
+  }
+
+  public Bitmap.Config getBitmapConfig() {
+    return mBitmapConfig;
   }
 
   public Supplier<MemoryCacheParams> getBitmapMemoryCacheParamsSupplier() {
@@ -187,12 +190,49 @@ public class ImagePipelineConfig {
     return mContext;
   }
 
+  /**
+   * @deprecated Use {@link #getExperiments()} and
+   * {@link ImagePipelineExperiments#isDecodeFileDescriptorEnabled()} ()}
+   */
+  public boolean isDecodeFileDescriptorEnabled() {
+    return mImagePipelineExperiments.isDecodeFileDescriptorEnabled();
+  }
+
+  public boolean isDecodeMemoryFileEnabled() {
+    return mDecodeMemoryFileEnabled;
+  }
+
+  public FileCacheFactory getFileCacheFactory() {
+    return mFileCacheFactory;
+  }
+
+  public boolean isDownsampleEnabled() {
+    return mDownsampleEnabled;
+  }
+
+  /**
+   * @deprecated Use {@link #getExperiments()} and
+   * {@link ImagePipelineExperiments#isWebpSupportEnabled()} ()}
+   */
+  public boolean isWebpSupportEnabled() {
+    return mImagePipelineExperiments.isWebpSupportEnabled();
+  }
+
   public Supplier<MemoryCacheParams> getEncodedMemoryCacheParamsSupplier() {
     return mEncodedMemoryCacheParamsSupplier;
   }
 
   public ExecutorSupplier getExecutorSupplier() {
     return mExecutorSupplier;
+  }
+
+  /**
+   * @deprecated Use {@link #getExperiments()} and
+   * {@link ImagePipelineExperiments#getForceSmallCacheThresholdBytes()}
+   */
+  @Deprecated
+  public int getForceSmallCacheThresholdBytes() {
+    return mImagePipelineExperiments.getForceSmallCacheThresholdBytes();
   }
 
   public ImageCacheStatsTracker getImageCacheStatsTracker() {
@@ -220,10 +260,6 @@ public class ImagePipelineConfig {
     return mNetworkFetcher;
   }
 
-  public boolean isDownsampleEnabled() {
-    return mDownsampleEnabled;
-  }
-
   @Nullable
   public PlatformBitmapFactory getPlatformBitmapFactory() {
     return mPlatformBitmapFactory;
@@ -249,6 +285,10 @@ public class ImagePipelineConfig {
     return mSmallImageDiskCacheConfig;
   }
 
+  public ImagePipelineExperiments getExperiments() {
+    return mImagePipelineExperiments;
+  }
+
   public static Builder newBuilder(Context context) {
     return new Builder(context);
   }
@@ -256,10 +296,12 @@ public class ImagePipelineConfig {
   public static class Builder {
 
     private AnimatedImageFactory mAnimatedImageFactory;
+    private Bitmap.Config mBitmapConfig;
     private Supplier<MemoryCacheParams> mBitmapMemoryCacheParamsSupplier;
     private CacheKeyFactory mCacheKeyFactory;
     private final Context mContext;
     private boolean mDownsampleEnabled = false;
+    private boolean mDecodeMemoryFileEnabled;
     private Supplier<MemoryCacheParams> mEncodedMemoryCacheParamsSupplier;
     private ExecutorSupplier mExecutorSupplier;
     private ImageCacheStatsTracker mImageCacheStatsTracker;
@@ -274,6 +316,9 @@ public class ImagePipelineConfig {
     private Set<RequestListener> mRequestListeners;
     private boolean mResizeAndRotateEnabledForNetwork = true;
     private DiskCacheConfig mSmallImageDiskCacheConfig;
+    private FileCacheFactory mFileCacheFactory;
+    private final ImagePipelineExperiments.Builder mExperimentsBuilder
+        = new ImagePipelineExperiments.Builder(this);
 
     private Builder(Context context) {
       // Doesn't use a setter as always required.
@@ -282,6 +327,11 @@ public class ImagePipelineConfig {
 
     public Builder setAnimatedImageFactory(AnimatedImageFactory animatedImageFactory) {
       mAnimatedImageFactory = animatedImageFactory;
+      return this;
+    }
+
+    public Builder setBitmapsConfig(Bitmap.Config config) {
+      mBitmapConfig = config;
       return this;
     }
 
@@ -297,6 +347,34 @@ public class ImagePipelineConfig {
       return this;
     }
 
+    public Builder setDecodeMemoryFileEnabled(boolean decodeMemoryFileEnabled) {
+      mDecodeMemoryFileEnabled = decodeMemoryFileEnabled;
+      return this;
+    }
+
+    public Builder setFileCacheFactory(FileCacheFactory fileCacheFactory) {
+      mFileCacheFactory = fileCacheFactory;
+      return this;
+    }
+
+    /**
+     * @deprecated use {@link Builder#setFileCacheFactory} instead
+     */
+    @Deprecated
+    public Builder setDiskStorageFactory(DiskStorageFactory diskStorageFactory) {
+      setFileCacheFactory(new DiskStorageCacheFactory(diskStorageFactory));
+      return this;
+    }
+
+    public boolean isDownsampleEnabled() {
+      return mDownsampleEnabled;
+    }
+
+    public Builder setDownsampleEnabled(boolean downsampleEnabled) {
+      mDownsampleEnabled = downsampleEnabled;
+      return this;
+    }
+
     public Builder setEncodedMemoryCacheParamsSupplier(
         Supplier<MemoryCacheParams> encodedMemoryCacheParamsSupplier) {
       mEncodedMemoryCacheParamsSupplier =
@@ -306,11 +384,6 @@ public class ImagePipelineConfig {
 
     public Builder setExecutorSupplier(ExecutorSupplier executorSupplier) {
       mExecutorSupplier = executorSupplier;
-      return this;
-    }
-
-    public Builder setDownsampleEnabled(boolean downsampleEnabled) {
-      this.mDownsampleEnabled = downsampleEnabled;
       return this;
     }
 
@@ -372,6 +445,10 @@ public class ImagePipelineConfig {
     public Builder setSmallImageDiskCacheConfig(DiskCacheConfig smallImageDiskCacheConfig) {
       mSmallImageDiskCacheConfig = smallImageDiskCacheConfig;
       return this;
+    }
+
+    public ImagePipelineExperiments.Builder experiment() {
+      return mExperimentsBuilder;
     }
 
     public ImagePipelineConfig build() {

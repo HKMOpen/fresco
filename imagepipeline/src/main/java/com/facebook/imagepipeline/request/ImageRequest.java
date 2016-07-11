@@ -16,9 +16,11 @@ import java.io.File;
 
 import android.net.Uri;
 
+import com.facebook.common.internal.Objects;
 import com.facebook.imagepipeline.common.ImageDecodeOptions;
 import com.facebook.imagepipeline.common.Priority;
 import com.facebook.imagepipeline.common.ResizeOptions;
+import com.facebook.imageutils.BitmapUtil;
 
 /**
  * Immutable object encapsulating everything pipeline has to know about requested image to proceed.
@@ -26,8 +28,8 @@ import com.facebook.imagepipeline.common.ResizeOptions;
 @Immutable
 public class ImageRequest {
 
-  /** image type */
-  private final ImageType mImageType;
+  /** Cache choice */
+  private final CacheChoice mCacheChoice;
 
   /** Source Uri */
   private final Uri mSourceUri;
@@ -71,7 +73,7 @@ public class ImageRequest {
   }
 
   protected ImageRequest(ImageRequestBuilder builder) {
-    mImageType = builder.getImageType();
+    mCacheChoice = builder.getCacheChoice();
     mSourceUri = builder.getSourceUri();
 
     mProgressiveRenderingEnabled = builder.isProgressiveRenderingEnabled();
@@ -89,8 +91,8 @@ public class ImageRequest {
     mPostprocessor = builder.getPostprocessor();
   }
 
-  public ImageType getImageType() {
-    return mImageType;
+  public CacheChoice getCacheChoice() {
+    return mCacheChoice;
   }
 
   public Uri getSourceUri() {
@@ -98,11 +100,11 @@ public class ImageRequest {
   }
 
   public int getPreferredWidth() {
-    return (mResizeOptions != null) ? mResizeOptions.width : -1;
+    return (mResizeOptions != null) ? mResizeOptions.width : (int) BitmapUtil.MAX_BITMAP_SIZE;
   }
 
   public int getPreferredHeight() {
-    return (mResizeOptions != null) ? mResizeOptions.height : -1;
+    return (mResizeOptions != null) ? mResizeOptions.height : (int) BitmapUtil.MAX_BITMAP_SIZE;
   }
 
   public @Nullable ResizeOptions getResizeOptions() {
@@ -148,10 +150,26 @@ public class ImageRequest {
     return mPostprocessor;
   }
 
+  @Override
+  public boolean equals(Object o) {
+    if (!(o instanceof ImageRequest)) {
+      return false;
+    }
+    ImageRequest request = (ImageRequest) o;
+    return Objects.equal(mSourceUri, request.mSourceUri) &&
+        Objects.equal(mCacheChoice, request.mCacheChoice) &&
+        Objects.equal(mSourceFile, request.mSourceFile);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hashCode(mCacheChoice, mSourceUri, mSourceFile);
+  }
+
   /**
-   * An enum describing type of the image.
+   * An enum describing the cache choice.
    */
-  public enum ImageType {
+  public enum CacheChoice {
     /* Indicates that this image should go in the small disk cache, if one is being used */
     SMALL,
 

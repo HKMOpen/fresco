@@ -29,15 +29,15 @@ public class BitmapMemoryCacheProducer implements Producer<CloseableReference<Cl
 
   private final MemoryCache<CacheKey, CloseableImage> mMemoryCache;
   private final CacheKeyFactory mCacheKeyFactory;
-  private final Producer<CloseableReference<CloseableImage>> mNextProducer;
+  private final Producer<CloseableReference<CloseableImage>> mInputProducer;
 
   public BitmapMemoryCacheProducer(
       MemoryCache<CacheKey, CloseableImage> memoryCache,
       CacheKeyFactory cacheKeyFactory,
-      Producer<CloseableReference<CloseableImage>> nextProducer) {
+      Producer<CloseableReference<CloseableImage>> inputProducer) {
     mMemoryCache = memoryCache;
     mCacheKeyFactory = cacheKeyFactory;
-    mNextProducer = nextProducer;
+    mInputProducer = inputProducer;
   }
 
   @Override
@@ -49,7 +49,8 @@ public class BitmapMemoryCacheProducer implements Producer<CloseableReference<Cl
     final String requestId = producerContext.getId();
     listener.onProducerStart(requestId, getProducerName());
     final ImageRequest imageRequest = producerContext.getImageRequest();
-    final CacheKey cacheKey = mCacheKeyFactory.getBitmapCacheKey(imageRequest);
+    final Object callerContext = producerContext.getCallerContext();
+    final CacheKey cacheKey = mCacheKeyFactory.getBitmapCacheKey(imageRequest, callerContext);
 
     CloseableReference<CloseableImage> cachedReference = mMemoryCache.get(cacheKey);
 
@@ -84,7 +85,7 @@ public class BitmapMemoryCacheProducer implements Producer<CloseableReference<Cl
         requestId,
         getProducerName(),
         listener.requiresExtraMap(requestId) ? ImmutableMap.of(VALUE_FOUND, "false") : null);
-    mNextProducer.produceResults(wrappedConsumer, producerContext);
+    mInputProducer.produceResults(wrappedConsumer, producerContext);
   }
 
   protected Consumer<CloseableReference<CloseableImage>> wrapConsumer(

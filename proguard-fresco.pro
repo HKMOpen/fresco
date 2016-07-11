@@ -14,4 +14,6 @@
 }
 
 -dontwarn okio.**
+-dontwarn com.squareup.okhttp.**
 -dontwarn javax.annotation.**
+-dontwarn com.android.volley.toolbox.**
